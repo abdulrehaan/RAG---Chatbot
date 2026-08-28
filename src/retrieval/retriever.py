@@ -12,13 +12,17 @@ from src.vectorstore.qdrant_store import QdrantStore
 
 class Retriever:
     """
-    Converts a user query into an embedding
-    and retrieves the most relevant document
-    chunks from Qdrant.
+    Converts a user query into an embedding and retrieves
+    the most relevant document chunks from Qdrant.
     """
 
-    def __init__(self, top_k: int = 3):
+    def __init__(
+        self,
+        top_k: int = 3,
+        score_threshold: float = 0.60
+    ):
         self.top_k = top_k
+        self.score_threshold = score_threshold
 
         print("Initializing retriever...")
 
@@ -26,20 +30,31 @@ class Retriever:
         self.vector_store = QdrantStore()
 
         print("Retriever initialized successfully.")
+        print(f"Top K: {self.top_k}")
+        print(f"Score threshold: {self.score_threshold}")
 
     def retrieve(self, query: str) -> List[Dict]:
         """
         Retrieve the most relevant document chunks
         for a given user query.
+
+        Results below the similarity threshold
+        are discarded.
         """
 
         if not query.strip():
             raise ValueError("Query cannot be empty.")
 
-        # Convert query into a 384-dimensional embedding
+        # ----------------------------------------------------
+        # Convert query into embedding
+        # ----------------------------------------------------
+
         query_embedding = self.embedder.embed_text(query)
 
+        # ----------------------------------------------------
         # Search Qdrant
+        # ----------------------------------------------------
+
         results = self.vector_store.search(
             query_embedding=query_embedding,
             limit=self.top_k
@@ -47,7 +62,15 @@ class Retriever:
 
         retrieved_chunks = []
 
+        # ----------------------------------------------------
+        # Filter results by similarity score
+        # ----------------------------------------------------
+
         for result in results:
+
+            if result.score < self.score_threshold:
+                continue
+
             retrieved_chunks.append(
                 {
                     "score": result.score,
@@ -60,23 +83,32 @@ class Retriever:
         return retrieved_chunks
 
 
+# ============================================================
+# TEST
+# ============================================================
+
 if __name__ == "__main__":
 
     print("=" * 60)
     print("RAG RETRIEVAL TEST")
     print("=" * 60)
 
-    retriever = Retriever(top_k=3)
+    retriever = Retriever(
+        top_k=3,
+        score_threshold=0.60
+    )
 
     query = "What happens if I arrive late?"
 
-    print(f"\nQuery:")
+    print("\nQuery:")
     print(query)
 
     results = retriever.retrieve(query)
 
     print("\nRetrieved documents:")
     print("-" * 60)
+
+    print(f"\nRelevant documents: {len(results)}")
 
     for i, result in enumerate(results, start=1):
 

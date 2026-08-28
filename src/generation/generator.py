@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Optional
 
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -27,11 +26,14 @@ MODEL_PATH = (
 class Generator:
     """
     Generates answers using FLAN-T5.
+
+    The model is instructed to answer only from
+    the supplied context.
     """
 
     def __init__(self, model_path: Path = MODEL_PATH):
 
-        print(f"Loading generation model from:")
+        print("Loading generation model from:")
         print(model_path)
 
         if not model_path.exists():
@@ -39,16 +41,22 @@ class Generator:
                 f"Model not found at: {model_path}"
             )
 
-        # Use CPU because CUDA is not available
+        # CPU because CUDA is not available
         self.device = torch.device("cpu")
 
+        # ----------------------------------------------------
         # Load tokenizer
+        # ----------------------------------------------------
+
         self.tokenizer = AutoTokenizer.from_pretrained(
             str(model_path),
             local_files_only=True
         )
 
+        # ----------------------------------------------------
         # Load model
+        # ----------------------------------------------------
+
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
             str(model_path),
             local_files_only=True
@@ -56,17 +64,28 @@ class Generator:
 
         self.model.to(self.device)
 
+        # Evaluation mode
+        self.model.eval()
+
         print("Generation model loaded successfully.")
         print(f"Device: {self.device}")
+
+    # ========================================================
+    # GENERATE ANSWER
+    # ========================================================
 
     def generate(
         self,
         prompt: str,
-        max_new_tokens: int = 150
+        max_new_tokens: int = 80
     ) -> str:
         """
-        Generate an answer from a prompt.
+        Generate an answer from the supplied prompt.
         """
+
+        # ----------------------------------------------------
+        # Tokenize prompt
+        # ----------------------------------------------------
 
         inputs = self.tokenizer(
             prompt,
@@ -80,16 +99,34 @@ class Generator:
             for key, value in inputs.items()
         }
 
+        # ----------------------------------------------------
+        # Generate answer
+        # ----------------------------------------------------
+
         with torch.no_grad():
 
             outputs = self.model.generate(
-    **inputs,
-    max_new_tokens=max_new_tokens,
-    min_new_tokens=10,
-    do_sample=False,
-    num_beams=4,
-    early_stopping=True
-)
+                **inputs,
+
+                # Limit answer length
+                max_new_tokens=max_new_tokens,
+
+                # Deterministic generation
+                do_sample=False,
+
+                # Beam search
+                num_beams=4,
+
+                # Prevent repetitive answers
+                no_repeat_ngram_size=3,
+
+                # Stop when appropriate
+                early_stopping=True
+            )
+
+        # ----------------------------------------------------
+        # Decode
+        # ----------------------------------------------------
 
         answer = self.tokenizer.decode(
             outputs[0],
@@ -112,17 +149,24 @@ if __name__ == "__main__":
     generator = Generator()
 
     prompt = """
-    Answer the question based only on the context.
+Answer the question using only the information provided
+in the context.
 
-    Context:
-    Employees are expected to maintain regular attendance.
-    Employees arriving more than 15 minutes late may be marked as late.
-    Three late arrivals in a month may require a discussion
-    with the reporting manager.
+Do not use outside knowledge.
+Do not mention information that is unrelated to the question.
+Give a short and direct answer.
 
-    Question:
-    What happens if an employee arrives more than 15 minutes late?
-    """
+Context:
+Employees are expected to maintain regular attendance.
+Employees arriving more than 15 minutes late may be marked as late.
+Three late arrivals in a month may require a discussion
+with the reporting manager.
+
+Question:
+What happens if an employee arrives more than 15 minutes late?
+
+Answer:
+"""
 
     print("\nPrompt:")
     print(prompt)
