@@ -3,10 +3,18 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 import uuid
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 COLLECTION_NAME = "company_policies"
 VECTOR_SIZE = 384
 QDRANT_PATH = "data/qdrant"
 
+
+# ============================================================
+# QDRANT STORE
+# ============================================================
 
 class QdrantStore:
     """
@@ -14,17 +22,42 @@ class QdrantStore:
     """
 
     def __init__(self):
+
         # Persistent local Qdrant database
-        self.client = QdrantClient(path=QDRANT_PATH)
+        self.client = QdrantClient(
+            path=QDRANT_PATH
+        )
 
         self._create_collection()
+
+    def close(self):
+        """
+        Properly close the Qdrant client.
+
+        This prevents Qdrant's cleanup from being triggered
+        during Python interpreter shutdown.
+        """
+
+        if self.client is not None:
+
+            self.client.close()
+
+            print(
+                "Qdrant client closed."
+            )
+
+            self.client = None
 
     def _create_collection(self):
         """
         Create the collection if it doesn't already exist.
         """
 
-        collections = self.client.get_collections().collections
+        collections = (
+            self.client
+            .get_collections()
+            .collections
+        )
 
         collection_names = [
             collection.name
@@ -34,6 +67,7 @@ class QdrantStore:
         if COLLECTION_NAME not in collection_names:
 
             self.client.create_collection(
+
                 collection_name=COLLECTION_NAME,
 
                 vectors_config=VectorParams(
@@ -47,6 +81,7 @@ class QdrantStore:
             )
 
         else:
+
             print(
                 f"Collection already exists: {COLLECTION_NAME}"
             )
@@ -57,6 +92,7 @@ class QdrantStore:
         """
 
         if len(chunks) != len(embeddings):
+
             raise ValueError(
                 "Number of chunks and embeddings must be equal."
             )
@@ -68,6 +104,7 @@ class QdrantStore:
         ):
 
             point = PointStruct(
+
                 id=str(uuid.uuid4()),
 
                 vector=embedding,
@@ -82,7 +119,9 @@ class QdrantStore:
             points.append(point)
 
         self.client.upsert(
+
             collection_name=COLLECTION_NAME,
+
             points=points
         )
 
@@ -96,13 +135,20 @@ class QdrantStore:
         """
 
         results = self.client.query_points(
+
             collection_name=COLLECTION_NAME,
+
             query=query_embedding,
+
             limit=limit
         )
 
         return results.points
 
+
+# ============================================================
+# TEST
+# ============================================================
 
 if __name__ == "__main__":
 
@@ -112,12 +158,19 @@ if __name__ == "__main__":
 
     store = QdrantStore()
 
-    print("\nQdrant is working correctly.")
+    try:
 
-    print(
-        "\nCollections:"
-    )
+        print("\nQdrant is working correctly.")
 
-    print(
-        store.client.get_collections()
-    )
+        print(
+            "\nCollections:"
+        )
+
+        print(
+            store.client.get_collections()
+        )
+
+    finally:
+
+        # Always close Qdrant properly
+        store.close()

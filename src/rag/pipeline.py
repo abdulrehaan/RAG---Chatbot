@@ -3,26 +3,23 @@ import sys
 
 
 # ============================================================
-# PATH CONFIGURATION
+# PROJECT PATH
 # ============================================================
 
+# Add src directory to Python path
 SRC_DIR = Path(__file__).resolve().parents[1]
 
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 
+# ============================================================
+# IMPORTS
+# ============================================================
+
 from embeddings.embedder import Embedder
 from generation.generator import Generator
 from vectorstore.qdrant_store import QdrantStore
-
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-DEFAULT_TOP_K = 3
-SIMILARITY_THRESHOLD = 0.65
 
 
 # ============================================================
@@ -35,55 +32,64 @@ class RAGPipeline:
 
     Flow:
 
-    User Query
-        ↓
-    Query Embedding
-        ↓
-    Qdrant Similarity Search
-        ↓
-    Similarity Filtering
-        ↓
-    Context Construction
-        ↓
-    Prompt Creation
-        ↓
-    FLAN-T5 Generation
-        ↓
-    Final Answer
+        User Query
+            ↓
+        Query Embedding
+            ↓
+        Qdrant Similarity Search
+            ↓
+        Relevance Filtering
+            ↓
+        Context Construction
+            ↓
+        FLAN-T5 Generation
+            ↓
+        Final Answer
     """
 
     def __init__(
         self,
-        top_k: int = DEFAULT_TOP_K,
-        similarity_threshold: float = SIMILARITY_THRESHOLD
+        top_k: int = 3,
+        score_threshold: float = 0.65
     ):
+        """
+        Initialize the RAG pipeline.
+
+        Args:
+            top_k:
+                Maximum number of documents to retrieve.
+
+            score_threshold:
+                Minimum similarity score required for
+                a document to be used for generation.
+        """
 
         print("=" * 60)
         print("INITIALIZING RAG PIPELINE")
         print("=" * 60)
 
         self.top_k = top_k
-        self.similarity_threshold = similarity_threshold
+        self.score_threshold = score_threshold
 
-        # ----------------------------------------------------
-        # 1. Embedding Model
-        # ----------------------------------------------------
+        # --------------------------------------------------------
+        # 1. Embedding model
+        # --------------------------------------------------------
 
         print("\n[1/3] Loading embedding model...")
 
         self.embedder = Embedder()
 
-        # ----------------------------------------------------
+        # --------------------------------------------------------
         # 2. Qdrant
-        # ----------------------------------------------------
+        # --------------------------------------------------------
 
         print("\n[2/3] Connecting to Qdrant...")
 
         self.vector_store = QdrantStore()
 
-        # ----------------------------------------------------
-        # 3. Generation Model
-        # ----------------------------------------------------
+        # --------------------------------------------------------
+        # 3. Generation model
+        # --------------------------------------------------------
 
         print("\n[3/3] Loading generation model...")
 
@@ -96,16 +102,24 @@ class RAGPipeline:
     # ========================================================
 
     def retrieve(self, query: str):
-
         """
-        Retrieve the most relevant document chunks.
+        Retrieve relevant documents from Qdrant.
+
+        Args:
+            query:
+                User's question.
+
+        Returns:
+            List of Qdrant search results.
         """
 
-        if not query.strip():
+        if not query or not query.strip():
             raise ValueError("Query cannot be empty.")
 
+        # Convert query into embedding
         query_embedding = self.embedder.embed_text(query)
 
+        # Search vector database
         results = self.vector_store.search(
             query_embedding=query_embedding,
             limit=self.top_k
@@ -114,70 +128,71 @@ class RAGPipeline:
         return results
 
     # ========================================================
-    # FILTER RESULTS
+    # FILTERING
     # ========================================================
 
     def filter_results(self, results):
-
         """
-        Remove weakly relevant results using
-        cosine similarity threshold.
+        Remove documents below the similarity threshold.
+
+        This prevents unrelated documents from being passed
+        to the generation model.
         """
 
         filtered_results = []
 
         for result in results:
 
-            if result.score >= self.similarity_threshold:
+            if result.score >= self.score_threshold:
                 filtered_results.append(result)
 
         return filtered_results
 
     # ========================================================
-    # BUILD CONTEXT
+    # CONTEXT
     # ========================================================
 
     def build_context(self, results) -> str:
-
         """
-        Convert retrieved results into clean context.
+        Combine retrieved document chunks into context.
         """
 
         context_parts = []
 
         for result in results:
 
-            text = result.payload.get("text", "")
+            text = result.payload.get("text", "").strip()
 
             if text:
-                context_parts.append(text.strip())
+                context_parts.append(text)
 
         return "\n\n".join(context_parts)
 
     # ========================================================
-    # BUILD PROMPT
+    # PROMPT
     # ========================================================
 
     def build_prompt(
         self,
-        query: str,
-        context: str
+        context: str,
+        query: str
     ) -> str:
-
         """
-        Create a focused prompt for FLAN-T5.
+        Build a grounded prompt for FLAN-T5.
         """
 
-        prompt = f"""
-Answer the question using only the information in the context.
+        return f"""
+Answer the question using ONLY the information
+provided in the context.
 
-Rules:
-1. Do not use outside knowledge.
-2. Do not invent information.
-3. Give a complete and direct answer.
-4. Include all relevant details from the context.
-5. If the context does not contain the answer, say:
+Do not use outside knowledge.
+
+If the answer is not explicitly stated in the
+context, say:
+
 "I could not find the answer in the provided documents."
+
+Keep the answer short, clear, and factual.
 
 Context:
 {context}
@@ -186,19 +201,26 @@ Question:
 {query}
 
 Answer:
-"""
-
-        return prompt.strip()
+""".strip()
 
     # ========================================================
     # ANSWER
     # ========================================================
 
     def answer(self, query: str) -> str:
+        """
+        Complete RAG process:
 
+        Query
+        → Retrieval
+        → Filtering
+        → Context
+        → Generation
+        → Answer
         """
-        Complete RAG process.
-        """
+
+        if not query or not query.strip():
+            return "Please enter a valid question."
 
         # ----------------------------------------------------
         # Step 1: Retrieve
@@ -207,7 +229,7 @@ Answer:
         results = self.retrieve(query)
 
         if not results:
-            return "I could not find the answer in the provided documents."
+            return "I could not find relevant information in the documents."
 
         # ----------------------------------------------------
         # Step 2: Filter
@@ -215,40 +237,90 @@ Answer:
 
         filtered_results = self.filter_results(results)
 
-        if not filtered_results:
-            return "I could not find the answer in the provided documents."
+        print("\n" + "=" * 60)
+        print("FILTERED RESULTS")
+        print("=" * 60)
+
+        print(
+            f"\nUsing {len(filtered_results)} "
+            f"of {len(results)} retrieved documents."
+        )
+
+        for index, result in enumerate(
+            filtered_results,
+            start=1
+        ):
+
+            print(
+                f"\nResult {index}: "
+                f"score={result.score:.4f}"
+            )
 
         # ----------------------------------------------------
-        # Step 3: Build Context
+        # Step 3: Build context
         # ----------------------------------------------------
 
         context = self.build_context(filtered_results)
 
         if not context:
-            return "I could not find the answer in the provided documents."
+
+            return (
+                "I could not find the answer "
+                "in the provided documents."
+            )
 
         # ----------------------------------------------------
-        # Step 4: Build Prompt
+        # Step 4: Build prompt
         # ----------------------------------------------------
 
         prompt = self.build_prompt(
-            query=query,
-            context=context
+            context=context,
+            query=query
         )
 
         # ----------------------------------------------------
-        # Step 5: Generate Answer
+        # Step 5: Generate answer
         # ----------------------------------------------------
 
-        answer = self.generator.generate(
-            prompt,
-            max_new_tokens=80
-        )
+        print("\n" + "=" * 60)
+        print("GENERATING ANSWER")
+        print("=" * 60)
+
+        answer = self.generator.generate(prompt)
+
+        # ----------------------------------------------------
+        # Safety fallback
+        # ----------------------------------------------------
 
         if not answer.strip():
-            return "I could not find the answer in the provided documents."
+
+            return (
+                "I could not find the answer "
+                "in the provided documents."
+            )
 
         return answer.strip()
+
+    # ========================================================
+    # CLOSE
+    # ========================================================
+
+    def close(self):
+        """
+        Close the Qdrant client cleanly.
+        """
+
+        try:
+            if hasattr(self.vector_store, "client"):
+                self.vector_store.client.close()
+
+            print("\nQdrant client closed.")
+
+        except Exception as error:
+
+            print(
+                f"\nWarning while closing Qdrant: {error}"
+            )
 
 
 # ============================================================
@@ -257,74 +329,77 @@ Answer:
 
 if __name__ == "__main__":
 
-    pipeline = RAGPipeline(
-        top_k=3,
-        similarity_threshold=0.65
-    )
+    pipeline = None
 
-    print("\n" + "=" * 60)
-    print("RAG PIPELINE TEST")
-    print("=" * 60)
+    try:
 
-    query = "What happens if I arrive more than 15 minutes late?"
-
-    print("\nQuestion:")
-    print(query)
-
-    # --------------------------------------------------------
-    # RETRIEVAL
-    # --------------------------------------------------------
-
-    print("\nRetrieving relevant documents...")
-
-    results = pipeline.retrieve(query)
-
-    print(f"\nRetrieved {len(results)} documents.")
-
-    for index, result in enumerate(results, start=1):
-
-        print(f"\n{'-' * 60}")
-        print(f"RESULT {index}")
-
-        print(f"Score: {result.score:.4f}")
-
-        text = result.payload.get("text", "")
-
-        print("\nText:")
-        print(text)
-
-    # --------------------------------------------------------
-    # FILTERING
-    # --------------------------------------------------------
-
-    filtered_results = pipeline.filter_results(results)
-
-    print("\n" + "=" * 60)
-    print("FILTERED RESULTS")
-    print("=" * 60)
-
-    print(
-        f"\nUsing {len(filtered_results)} "
-        f"of {len(results)} retrieved documents."
-    )
-
-    for index, result in enumerate(filtered_results, start=1):
-
-        print(
-            f"\nResult {index}: "
-            f"score={result.score:.4f}"
+        pipeline = RAGPipeline(
+            top_k=3,
+            score_threshold=0.65
         )
 
-    # --------------------------------------------------------
-    # GENERATION
-    # --------------------------------------------------------
+        print("\n" + "=" * 60)
+        print("RAG PIPELINE TEST")
+        print("=" * 60)
 
-    print("\n" + "=" * 60)
-    print("GENERATING ANSWER")
-    print("=" * 60)
+        query = (
+            "What happens if I arrive "
+            "more than 15 minutes late?"
+        )
 
-    answer = pipeline.answer(query)
+        print("\nQuestion:")
+        print(query)
 
-    print("\nAnswer:")
-    print("-" * 60)
-    print(answer)
+        print("\nRetrieving relevant documents...")
+
+        # ----------------------------------------------------
+        # Retrieve documents
+        # ----------------------------------------------------
+
+        results = pipeline.retrieve(query)
+
+        print(
+            f"\nRetrieved {len(results)} documents."
+        )
+
+        # ----------------------------------------------------
+        # Display retrieved documents
+        # ----------------------------------------------------
+
+        for index, result in enumerate(
+            results,
+            start=1
+        ):
+
+            print("\n" + "-" * 60)
+
+            print(f"RESULT {index}")
+
+            print(
+                f"Score: {result.score:.4f}"
+            )
+
+            text = result.payload.get(
+                "text",
+                ""
+            )
+
+            print("\nText:")
+            print(text)
+
+        # ----------------------------------------------------
+        # Generate answer
+        # ----------------------------------------------------
+
+        answer = pipeline.answer(query)
+
+        print("\n" + "=" * 60)
+        print("FINAL ANSWER")
+        print("=" * 60)
+
+        print("\n" + answer)
+
+    finally:
+
+        if pipeline is not None:
+            pipeline.close()

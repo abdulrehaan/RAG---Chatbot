@@ -25,10 +25,7 @@ MODEL_PATH = (
 
 class Generator:
     """
-    Generates answers using FLAN-T5.
-
-    The model is instructed to answer only from
-    the supplied context.
+    Generates answers using the locally stored FLAN-T5 model.
     """
 
     def __init__(self, model_path: Path = MODEL_PATH):
@@ -41,11 +38,14 @@ class Generator:
                 f"Model not found at: {model_path}"
             )
 
-        # CPU because CUDA is not available
+        # ----------------------------------------------------
+        # Device
+        # ----------------------------------------------------
+
         self.device = torch.device("cpu")
 
         # ----------------------------------------------------
-        # Load tokenizer
+        # Tokenizer
         # ----------------------------------------------------
 
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -54,7 +54,7 @@ class Generator:
         )
 
         # ----------------------------------------------------
-        # Load model
+        # Model
         # ----------------------------------------------------
 
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
@@ -71,17 +71,20 @@ class Generator:
         print(f"Device: {self.device}")
 
     # ========================================================
-    # GENERATE ANSWER
+    # GENERATE
     # ========================================================
 
     def generate(
         self,
         prompt: str,
-        max_new_tokens: int = 80
+        max_new_tokens: int = 50
     ) -> str:
         """
-        Generate an answer from the supplied prompt.
+        Generate a concise answer from the given prompt.
         """
+
+        if not prompt or not prompt.strip():
+            raise ValueError("Prompt cannot be empty.")
 
         # ----------------------------------------------------
         # Tokenize prompt
@@ -100,7 +103,7 @@ class Generator:
         }
 
         # ----------------------------------------------------
-        # Generate answer
+        # Generate
         # ----------------------------------------------------
 
         with torch.no_grad():
@@ -108,19 +111,19 @@ class Generator:
             outputs = self.model.generate(
                 **inputs,
 
-                # Limit answer length
+                # Keep answers short
                 max_new_tokens=max_new_tokens,
 
                 # Deterministic generation
                 do_sample=False,
 
-                # Beam search
-                num_beams=4,
+                # Small beam search
+                num_beams=2,
 
-                # Prevent repetitive answers
-                no_repeat_ngram_size=3,
+                # Prevent unnecessary repetition
+                repetition_penalty=1.1,
 
-                # Stop when appropriate
+                # Stop when the model reaches EOS
                 early_stopping=True
             )
 
@@ -149,12 +152,7 @@ if __name__ == "__main__":
     generator = Generator()
 
     prompt = """
-Answer the question using only the information provided
-in the context.
-
-Do not use outside knowledge.
-Do not mention information that is unrelated to the question.
-Give a short and direct answer.
+Answer the question based only on the context.
 
 Context:
 Employees are expected to maintain regular attendance.
